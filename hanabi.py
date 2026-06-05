@@ -1,275 +1,392 @@
 #!/usr/bin/env python3
+"""Hanabi JFP 16"""
 import sys
 
-# Hanabi game
-
-# A card has a color (from A to Z) and a value (an integer)
+# Identity of the Card. If we dont know the value or color, we set it to None. 
+# The visible property (means we know the card) is true if both are not None
 class Card:
-    # How to explicitely represent type?
-    def __init__(self, color, value):
-        self.color = color
-        self.value = value
+    def __init__(self, value=None, color=None):
+        self.value = value  # int or None
+        self.color = color  # str ('A'..'Z') or None
 
-    def get_color(self):
-        return self.color
+    # Means we know the card value and color 
+    @property
+    def visible(self):
+        return self.value is not None and self.color is not None
 
-    def get_value(self):
-        return self.value
+    def __str__(self):
+        v = self.value if self.value is not None else '?'
+        c = self.color if self.color is not None else '?'
+        return f"{v}{c}"
+
+# Property of A card that we know (or don't know)
+# We can have positive knowledge (value/color known) 
+# and negative knowledge (value/color known NOT to be) 
+# The special property is for mode 7, and the date is for mode 6.
+class Knowledge:
+    def __init__(self, date=0):
+        self.value = None  # The card known value or None
+        self.color = None  # Known color or None
+        self.neg_values = set()  # Values that we know the card is NOT
+        self.neg_colors = set()  # Colors that we know the card is NOT
+        self.special = False  # Mode 7 sepcial hint
+        self.date = date  # Date of the last info received about this card (mode 6) 
+
+    # Basically the same as visible, but for knowledge. 
+    # We have complete knowledge about the card if we know its value and color.
+    @property
+    def complete(self):
+        return self.value is not None and self.color is not None
+
+    def deduce(self, all_values, all_colors):
+        """Mode 5 : déduit le champ restant quand tous les autres sont exclus."""
+        if self.value is None:
+            remaining = all_values - self.neg_values
+            if len(remaining) == 1:
+                self.value = next(iter(remaining))
+        if self.color is None:
+            remaining = all_colors - self.neg_colors
+            if len(remaining) == 1:
+                self.color = next(iter(remaining))
+
+    def __str__(self):
+        v = self.value if self.value is not None else '?'
+        c = self.color if self.color is not None else '?'
+        return f"{v}{c}"
 
 
-# We eed to have a list of cards:
-# as
-# draw pile, discard pile, piles of played card (for each color), and each plaers' hand
+# Each player has a hand of k cards, and a knowledge about each card.
+class Player:
+    def __init__(self, k):
+        self.k = k
+        self.cards = {p: Card() for p in range(1, k + 1)}
+        self.knowledge = {p: Knowledge() for p in range(1, k + 1)}
 
-def main():
-    k = n = moi = mode = 0
-    hands = {}        # hands[j][p] = (value_int, color_str) or ('?','?')
-    known_val = {}    # known_val[j][p] = int or None
-    known_col = {}    # known_col[j][p] = str or None
-    neg_val = {}      # neg_val[j][p] = set of int values known NOT to be there
-    neg_col = {}      # neg_col[j][p] = set of str colors known NOT to be there
-    special_hinted = {}  # special_hinted[j][p] = bool (mode 7)
-    card_date = {}    # card_date[j][p] = global_turn when card arrived (mode 6)
-    piles = {}        # piles[c] = int height
-    lives = tokens = 0
-    current_turn = 0  # temps: increments only when it's our turn (modes 1-3)
-    global_turn = 0   # increments on every 't' message
+    def positions(self):
+        return range(1, self.k + 1)
 
-    def colors():
+    def receive_card(self, p, value, color, date):
+        self.cards[p] = Card(value, color)
+        self.knowledge[p] = Knowledge(date)
+
+# Global state of the game
+class GameState:
+    def __init__(self, k, n, moi, mode):
+        self.k = k  # num of cards by player
+        self.n = n  # num of players
+        self.moi = moi  # our player number (1..n)
+        self.mode = mode  # game mode (1..7)
+        self.lives = 3
+        self.tokens = 8
+        self.piles = {c: 0 for c in self._all_colors(k)}  # top card of each pile of color c 
+        self.players = {j: Player(k) for j in range(1, n + 1)} 
+        self.current_turn = 0   # inscreased at each of our turn
+        self.global_turn = 0    # increased at each message 't'
+
+    @staticmethod
+    def _all_colors(k):
         return [chr(ord('A') + i) for i in range(k)]
 
-    def init_game():
-        nonlocal k, n, moi, mode, lives, tokens, current_turn, global_turn
-        hands.clear()
-        known_val.clear()
-        known_col.clear()
-        neg_val.clear()
-        neg_col.clear()
-        special_hinted.clear()
-        card_date.clear()
-        piles.clear()
-        current_turn = 0
-        global_turn = 0
-        lives = 3
-        tokens = 8
+    @property
+    def colors(self):
+        return self._all_colors(self.k)
 
-    def init_player(j):
-        hands[j] = {}
-        known_val[j] = {}
-        known_col[j] = {}
-        neg_val[j] = {}
-        neg_col[j] = {}
-        special_hinted[j] = {}
-        card_date[j] = {}
-        for p in range(1, k + 1):
-            hands[j][p] = ('?', '?')
-            known_val[j][p] = None
-            known_col[j][p] = None
-            neg_val[j][p] = set()
-            neg_col[j][p] = set()
-            special_hinted[j][p] = False
-            card_date[j][p] = 0
+    @property
+    def value_set(self):
+        return set(range(1, self.k + 1))
 
-    def apply_deductions(j, p):
-        if mode < 5:
-            return
-        if known_val[j][p] is None:
-            remaining = set(range(1, k + 1)) - neg_val[j][p]
-            if len(remaining) == 1:
-                known_val[j][p] = next(iter(remaining))
-        if known_col[j][p] is None:
-            remaining = set(colors()) - neg_col[j][p]
-            if len(remaining) == 1:
-                known_col[j][p] = next(iter(remaining))
+    @property
+    def color_set(self):
+        return set(self.colors)
 
-    def is_playable(v, c):
-        return piles.get(c, 0) == v - 1
+    def me(self):
+        return self.players[self.moi]
 
-    def complete_info(j, p):
-        return known_val[j][p] is not None and known_col[j][p] is not None
+    # top of pile of color c is v-1, so we can play value v on it
+    def is_playable(self, value, color):
+        return self.piles.get(color, 0) == value - 1
 
-    def action_cycle():
-        nonlocal current_turn
-        current_turn += 1
-        j_next = 1 + (moi % n)
-        t = current_turn % 3
-        if t == 1:
-            return f"I {j_next} A"
-        elif t == 2:
-            return f"d 1"
-        else:
-            return f"e 1"
+    def next_player(self):
+        return 1 + (self.moi % self.n)
 
-    def action_smart():
-        # Mode 7 Rule 1 bis: special-hinted positions
-        if mode >= 7 and lives > 0:
-            for p in range(1, k + 1):
-                if special_hinted[moi][p]:
-                    return f"e {p}"
+# Receive the actions from the protocol, update the game state, 
+# and decide what to do at our turn
+class Agent:
+    def __init__(self):
+        self.game = None
 
-        # Rule 1: complete info + playable
-        for p in range(1, k + 1):
-            if complete_info(moi, p):
-                v = known_val[moi][p]
-                c = known_col[moi][p]
-                if is_playable(v, c):
-                    return f"e {p}"
+    # Init the game
+    def start_game(self, k, n, moi, mode):
+        self.game = GameState(k, n, moi, mode)
 
-        # Rule 2 / 2 bis
-        if tokens > 0:
-            if mode >= 7:
-                # Rule 2 bis: find playable card of another player where special hint is possible
-                for j in range(1, n + 1):
-                    if j == moi:
-                        continue
-                    for p in range(1, k + 1):
-                        v, c = hands[j][p]
-                        if v == '?':
-                            continue
-                        v = int(v)
-                        if not is_playable(v, c):
-                            continue
-                        if complete_info(j, p):
-                            continue
-                        if special_hinted[j][p]:
-                            continue
-                        # Check if value hint or color hint would be special
-                        val_count = sum(1 for pp in range(1, k + 1)
-                                        if hands[j][pp][0] != '?' and int(hands[j][pp][0]) == v)
-                        col_count = sum(1 for pp in range(1, k + 1)
-                                        if hands[j][pp][1] != '?' and hands[j][pp][1] == c)
-                        if val_count == 1:
-                            return f"i {j} {v}"
-                        if col_count == 1:
-                            return f"I {j} {c}"
+    # Command n j p v c
+    def on_new_card(self, j, p, value, color):
+        g = self.game
+        g.players[j].receive_card(p, value, color, g.global_turn)
 
-            # Rule 2: give hint to another player's playable card without complete info
-            for j in range(1, n + 1):
-                if j == moi:
-                    continue
-                for p in range(1, k + 1):
-                    v, c = hands[j][p]
-                    if v == '?':
-                        continue
-                    v = int(v)
-                    if not is_playable(v, c):
-                        continue
-                    if complete_info(j, p):
-                        continue
-                    if known_val[j][p] is None:
-                        return f"i {j} {v}"
-                    else:
-                        return f"I {j} {c}"
-
-        # Rule 3 / 3 bis: discard
-        if mode >= 6:
-            best_p = 1
-            best_date = card_date[moi][1]
-            for p in range(2, k + 1):
-                d = card_date[moi][p]
-                if d < best_date or (d == best_date and p < best_p):
-                    best_p = p
-                    best_date = d
-            return f"d {best_p}"
-        else:
-            return "d 1"
-
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split()
-        msg = parts[0]
-
-        if msg == 'p':
-            k, n, moi, mode = int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
-            init_game()
-            for c in colors():
-                piles[c] = 0
-            for j in range(1, n + 1):
-                init_player(j)
-
-        elif msg == 'n':
-            j, p = int(parts[1]), int(parts[2])
-            v_str, c_str = parts[3], parts[4]
-            if v_str == '?':
-                hands[j][p] = ('?', '?')
+    # Command i j v b1 b2 ... bk 
+    def on_value_hint(self, j, value, bits):
+        g = self.game
+        special = (sum(bits) == 1)
+        player = g.players[j]
+        for p in player.positions():
+            # We update the knowledge of player j about his card p
+            # according to hint bits
+            kn = player.knowledge[p] 
+            if bits[p - 1] == 1:
+                if kn.value is None:
+                    kn.value = value
+                if g.mode >= 7 and special:
+                    kn.special = True
             else:
-                hands[j][p] = (int(v_str), c_str)
-            known_val[j][p] = None
-            known_col[j][p] = None
-            neg_val[j][p] = set()
-            neg_col[j][p] = set()
-            special_hinted[j][p] = False
-            card_date[j][p] = global_turn
+                # If the bit is 0, we know the card is NOT of the hinted value, 
+                # so we add it to neg_values
+                kn.neg_values.add(value)
+            if g.mode >= 5:
+                kn.deduce(g.value_set, g.color_set)
 
-        elif msg == 'i':
-            j, v = int(parts[1]), int(parts[2])
-            bits = [int(parts[3 + i]) for i in range(k)]
-            is_special = (sum(bits) == 1)
-            for p in range(1, k + 1):
-                if bits[p - 1] == 1:
-                    if known_val[j][p] is None:
-                        known_val[j][p] = v
-                    if mode >= 7 and is_special:
-                        special_hinted[j][p] = True
-                else:
-                    neg_val[j][p].add(v)
-                apply_deductions(j, p)
+    # Command I j c b1 b2 ... bk
+    # Basically the same as on_value_hint
+    def on_color_hint(self, j, color, bits):
+        g = self.game
+        special = (sum(bits) == 1)
+        player = g.players[j]
+        # We update the knowledge of player j about his card p
+        # according to hint bits
+        for p in player.positions():    # at each index p of the hand
+            kn = player.knowledge[p]
+            if bits[p - 1] == 1:
+                if kn.color is None:
+                    kn.color = color
+                if g.mode >= 7 and special:
+                    kn.special = True
+            else:
+                kn.neg_colors.add(color)
+            if g.mode >= 5:
+                kn.deduce(g.value_set, g.color_set)
 
-        elif msg == 'I':
-            j, c = int(parts[1]), parts[2]
-            bits = [int(parts[3 + i]) for i in range(k)]
-            is_special = (sum(bits) == 1)
-            for p in range(1, k + 1):
-                if bits[p - 1] == 1:
-                    if known_col[j][p] is None:
-                        known_col[j][p] = c
-                    if mode >= 7 and is_special:
-                        special_hinted[j][p] = True
-                else:
-                    neg_col[j][p].add(c)
-                apply_deductions(j, p)
+    # j vies jetons hA hB ... hw
+    # we just update the global state
+    def on_state(self, lives, tokens, pile_heights):
+        g = self.game
+        g.lives = lives
+        g.tokens = tokens
+        for c, h in zip(g.colors, pile_heights):
+            g.piles[c] = h
 
-        elif msg == 'j':
-            lives = int(parts[1])
-            tokens = int(parts[2])
-            for idx, c in enumerate(colors()):
-                piles[c] = int(parts[3 + idx])
+    # Command t j 
+    # its turn player j 
+    def on_turn(self, j):
+        g = self.game
+        g.global_turn += 1
+        if j != g.moi:
+            return None
+        if g.mode <= 3:  # for simple mode
+            return self._cycle_action()
 
-        elif msg == 't':
-            j = int(parts[1])
-            global_turn += 1
-            if j != moi:
+        # for deduction mode
+        return self._smart_action()
+
+    # Requests to display infos
+    # For mode 2, we show the hands of the other players
+    def show_hands(self):
+        g = self.game
+        lines = []
+        for j in range(1, g.n + 1):
+            if j == g.moi:
                 continue
-            if mode <= 3:
-                print(action_cycle(), flush=True)
-            else:
-                print(action_smart(), flush=True)
+            cards = " ".join(str(g.players[j].cards[p]) for p in g.players[j].positions())
+            lines.append(f"{j} m {cards}")
+        return lines
 
-        elif msg == 'm':
-            for j in range(1, n + 1):
-                if j == moi:
+    def show_knowledge(self):
+        g = self.game
+        lines = []
+        for j in range(1, g.n + 1):
+            know = " ".join(str(g.players[j].knowledge[p]) for p in g.players[j].positions())
+            lines.append(f"{j} r {know}")
+        return lines
+
+    # Strategy
+    # Mode 1-3 : action cycles are fixed
+    def _cycle_action(self):
+        g = self.game
+        g.current_turn += 1 # temps
+        phase = g.current_turn % 3
+        if phase == 1:
+            return f"I {g.next_player()} A"
+        if phase == 2:
+            return "d 1"
+        return "e 1"
+
+    # For mode 4 to 7
+    def _smart_action(self):
+        return (self._rule_special_play()  # rule 1bis (mode 7)
+                or self._rule_play()  # rule 1 (mode 4)
+                or self._rule_hint()  # rule 2/2bis
+                or self._rule_discard())  # rule 3/3bis
+
+
+    def _rule_special_play(self):
+        """Règle 1 bis : empiler une carte ayant reçu une indication spéciale."""
+        g = self.game
+        if g.mode < 7 or g.lives <= 0:
+            return None
+        me = g.me()
+        for p in me.positions():
+            if me.knowledge[p].special:
+                return f"e {p}"
+        return None
+
+    # For each card, if the player has full info on that card
+    # and we can stack it on the pile (top of pile is v-1 for color c)
+    # then we play command e p
+    def _rule_play(self):
+        g = self.game
+        me = g.me()
+        for p in me.positions():
+            kn = me.knowledge[p]
+            if kn.complete and g.is_playable(kn.value, kn.color):
+                return f"e {p}"
+        return None
+    
+    # For each card of each other player.
+    # if the card is visible and stackable
+    # and the other player doesnt have knowledge about it
+    # we give a hint about its value or color
+    def _rule_hint(self):
+        g = self.game
+        if g.tokens <= 0:  # no token left
+            return None
+        if g.mode >= 7:
+            special = self._special_hint()
+            if special:
+                return special
+
+        # for all the player (we prefer the one with lowest id first if multiple)
+        for j in range(1, g.n + 1):
+            if j == g.moi:  # skip ourself
+                continue
+
+            player = g.players[j]
+            for p in player.positions():
+                card = player.cards[p]
+                if not card.visible or not g.is_playable(card.value, card.color):
                     continue
-                cards = " ".join(
-                    f"{v}{c}" if v != '?' else "??"
-                    for p in range(1, k + 1)
-                    for v, c in [hands[j][p]]
-                )
-                print(f"{j} m {cards}", flush=True)
+                if player.knowledge[p].complete:
+                    continue
+                if player.knowledge[p].value is None:
+                    return f"i {j} {card.value}"
+                return f"I {j} {card.color}"
+        return None
 
-        elif msg == 'r':
-            for j in range(1, n + 1):
-                parts_r = " ".join(
-                    f"{known_val[j][p] if known_val[j][p] is not None else '?'}"
-                    f"{known_col[j][p] if known_col[j][p] is not None else '?'}"
-                    for p in range(1, k + 1)
-                )
-                print(f"{j} r {parts_r}", flush=True)
+    def _special_hint(self):
+        """Règle 2 bis : envoyer une indication spéciale (mode 7)."""
+        g = self.game
+        for j in range(1, g.n + 1):
+            if j == g.moi:
+                continue
+            player = g.players[j]
+            for p in player.positions():
+                card = player.cards[p]
+                if not card.visible or not g.is_playable(card.value, card.color):
+                    continue
+                kn = player.knowledge[p]
+                if kn.complete or kn.special:
+                    continue
+                val_count = sum(1 for q in player.positions()
+                                if player.cards[q].value == card.value)
+                col_count = sum(1 for q in player.positions()
+                                if player.cards[q].color == card.color)
+                if val_count == 1:
+                    return f"i {j} {card.value}"
+                if col_count == 1:
+                    return f"I {j} {card.color}"
+        return None
 
-        elif msg == 'f':
-            if int(parts[1]) == 0:
-                sys.exit(0)
+    # If theres no doable move indicated by rule1 and 2. We discard
+    def _rule_discard(self):
+        g = self.game
+        if g.mode < 6:  # if mode 4 and 5 we discard the first card
+            return "d 1"
+        
+        # mode 6 and 7
+        me = g.me()
+        best_p = 1
+        best_date = me.knowledge[1].date
+        for p in me.positions():
+            d = me.knowledge[p].date
+            if d < best_date or (d == best_date and p < best_p):
+                best_p, best_date = p, d
+        return f"d {best_p}"
+
+class Protocol:
+    def __init__(self, agent):
+        self.agent = agent
+
+    @staticmethod
+    def _emit(text):
+        print(text, flush=True)
+
+    def run(self, stream):
+        agent = self.agent
+        for raw in stream:
+            line = raw.strip()
+            if not line:
+                continue
+            parts = line.split()
+            tag = parts[0]
+
+            if tag == 'p':
+                k, n, moi, mode = map(int, parts[1:5])
+                agent.start_game(k, n, moi, mode)
+
+            elif tag == 'n':
+                j, p = int(parts[1]), int(parts[2])
+                v = None if parts[3] == '?' else int(parts[3])
+                c = None if parts[4] == '?' else parts[4]
+                agent.on_new_card(j, p, v, c)
+
+            elif tag == 'i':
+                j, v = int(parts[1]), int(parts[2])
+                bits = [int(x) for x in parts[3:]]
+                agent.on_value_hint(j, v, bits)
+
+            elif tag == 'I':
+                j, c = int(parts[1]), parts[2]
+                bits = [int(x) for x in parts[3:]]
+                agent.on_color_hint(j, c, bits)
+
+            elif tag == 'j':
+                lives, tokens = int(parts[1]), int(parts[2])
+                heights = [int(x) for x in parts[3:]]
+                agent.on_state(lives, tokens, heights)
+
+            elif tag == 't':
+                action = agent.on_turn(int(parts[1]))
+                if action is not None:
+                    self._emit(action)
+            
+            # Mode 2
+            elif tag == 'm':
+                for line_out in agent.show_hands():
+                    self._emit(line_out)
+
+            # Mode 3
+            elif tag == 'r':
+                for line_out in agent.show_knowledge():
+                    self._emit(line_out)
+
+            # End game
+            elif tag == 'f':
+                if int(parts[1]) == 0:
+                    return
 
 
-main()
+def main():
+    Protocol(Agent()).run(sys.stdin)
+
+
+if __name__ == "__main__":
+    main()
+
