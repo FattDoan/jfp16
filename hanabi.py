@@ -32,14 +32,14 @@ class Knowledge:
         self.special = False  # Mode 7 sepcial hint
         self.date = date  # Date of the last info received about this card (mode 6) 
 
-    # Basically the same as visible, but for knowledge. 
-    # We have complete knowledge about the card if we know its value and color.
+    # Basically the same as visible, but for knowledge
+    # We have complete knowledge about the card if we know its value and color
     @property
     def complete(self):
         return self.value is not None and self.color is not None
 
+    # Mode 5: if we have k-1 negative hints about a card, we can deduce the last one
     def deduce(self, all_values, all_colors):
-        """Mode 5 : déduit le champ restant quand tous les autres sont exclus."""
         if self.value is None:
             remaining = all_values - self.neg_values
             if len(remaining) == 1:
@@ -109,8 +109,8 @@ class GameState:
     def next_player(self):
         return 1 + (self.moi % self.n)
 
-# Receive the actions from the protocol, update the game state, 
-# and decide what to do at our turn
+# Contains methods to execute the commands 
+# received from the game and update the global state
 class Agent:
     def __init__(self):
         self.game = None
@@ -142,6 +142,8 @@ class Agent:
                 # If the bit is 0, we know the card is NOT of the hinted value, 
                 # so we add it to neg_values
                 kn.neg_values.add(value)
+            
+            # Deduce if receive enough negative hints (mode 5)
             if g.mode >= 5:
                 kn.deduce(g.value_set, g.color_set)
 
@@ -162,6 +164,8 @@ class Agent:
                     kn.special = True
             else:
                 kn.neg_colors.add(color)
+
+            # Deduce if receive enough negative hints (mode 5)
             if g.mode >= 5:
                 kn.deduce(g.value_set, g.color_set)
 
@@ -174,8 +178,8 @@ class Agent:
         for c, h in zip(g.colors, pile_heights):
             g.piles[c] = h
 
-    # Command t j 
-    # its turn player j 
+    # Command t j
+    # its turn player j
     def on_turn(self, j):
         g = self.game
         g.global_turn += 1
@@ -224,7 +228,7 @@ class Agent:
         return (self._rule_special_play()  # rule 1bis (mode 7)
                 or self._rule_play()  # rule 1 (mode 4)
                 or self._rule_hint()  # rule 2/2bis
-                or self._rule_discard())  # rule 3/3bis
+                or self._rule_discard())  # rule 3 (mode 4) / 3bis (mode 5)
 
 
     def _rule_special_play(self):
@@ -310,7 +314,7 @@ class Agent:
         if g.mode < 6:  # if mode 4 and 5 we discard the first card
             return "d 1"
         
-        # mode 6 and 7
+        # mode 6 and 7, we discard the card with the lowest date (turn counter)
         me = g.me()
         best_p = 1
         best_date = me.knowledge[1].date
@@ -320,7 +324,7 @@ class Agent:
                 best_p, best_date = p, d
         return f"d {best_p}"
 
-class Protocol:
+class Hanabi:
     def __init__(self, agent):
         self.agent = agent
 
@@ -384,7 +388,7 @@ class Protocol:
 
 
 def main():
-    Protocol(Agent()).run(sys.stdin)
+    Hanabi(Agent()).run(sys.stdin)
 
 
 if __name__ == "__main__":
