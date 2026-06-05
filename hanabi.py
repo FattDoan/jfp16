@@ -83,7 +83,7 @@ class GameState:
         self.players = {j: Player(k) for j in range(1, n + 1)} 
         self.current_turn = 0   # inscreased at each of our turn
         self.global_turn = 0    # increased at each message 't'
-                                
+
         # a list of hashmap (for each player) of type {card value, color} to 
         # keep track how many cards of such combination we've seen 
         # (in played piles, discard pile and hands of OTHER players)
