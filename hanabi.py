@@ -90,7 +90,7 @@ class GameState:
         # we init for each player, the seen cards of each combinasion to 0
         self.seen_cards = {
             p: {(v, chr(ord('A') + c - 1)): 0 for v in range(1, k + 1) for c in range(1, k + 1)}
-            for p in range(n)
+            for p in range(1, n+1)
         }
 
 
@@ -325,7 +325,7 @@ class AI:
 
                 # Rule 2ter mode 8: if the card is critical, 
                 # we give a special hint about it to make the other player play it immediately
-                if g.mode >= 8 and self.is_crtical_hint(card.value, card.color):
+                if g.mode >= 8 and self.is_critical_hint(card.value, card.color):
                     kn.special = True
                     if kn.value is None:
                         return f"i {j} {card.value}"
@@ -383,24 +383,25 @@ class AI:
     # This is called before attempting to discard a card with (v,c)
     # A critical card that it is the last one of its kind (v,c)
     # that is we've seen total-1 of them from other players and piles
+    # AND also if the pile height of color c is <= v-1 (so its playable in next turns)
     # The total number of cards of any combination (v,c) is
     # 3 if v=1, 1 if v=k and 2 otherwise
     def is_critical(self, value, color):
         g = self.game
         total = 3 if value == 1 else (1 if value == g.k else 2)
         seen = g.seen_cards[g.moi][(value, color)]
-        return seen >= total - 1
+        return seen >= total - 1 and g.piles[color] <= value - 1
 
     # This is called before attempting to give a hint about a card with (v,c)
     # If the other player doesnt have knowledge about a card and
     # such card is CRITICAL (as we've seen a TOTAL nb of them from other players and from discard pile)
     # and also playable,
     # we give a special hint about it to make them instantly play it
-    def is_crtical_hint(self, value, color):
+    def is_critical_hint(self, value, color):
         g = self.game
         total = 3 if value == 1 else (1 if value == g.k else 2)
         seen = g.seen_cards[g.moi][(value, color)]
-        return seen >= total
+        return seen >= total and g.piles[color] <= value - 1
 
 class Hanabi:
     def __init__(self, agent):
